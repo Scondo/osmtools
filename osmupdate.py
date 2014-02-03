@@ -250,7 +250,7 @@ class filecache(object):
             for filename in self.cachedfiles:
                 #Clear our temporary files (not downloaded)
                 if filename.endswith('tmp.o5c'):
-                    #remove(filename)
+                    remove(filename)
                     pass
             self.cachedfiles = newlist
 
