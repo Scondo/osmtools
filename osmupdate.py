@@ -479,7 +479,7 @@ args.new_file.endswith(".osc.gz") or args.new_file.endswith(".o5c.gz")
         hourly_timestamp = None
     #Clear last daily timestamp
     #if OSM file timestamp > latest daily timestamp - 16 hours
-    if (daily_timestamp - old_timestamp).total_seconds() < 30 * 60 \
+    if (daily_timestamp - old_timestamp).total_seconds() < 16 * 60 * 60 \
     and (args.minute or args.hour):
         daily_timestamp = None
     #Initialize start timestamp
