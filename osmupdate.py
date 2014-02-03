@@ -390,9 +390,9 @@ URL, right after the period identifier "day" etc.(default: "%(default)s")""")
 
     global_osmconvert_arguments = []
     final_osmconvert_arguments = []
-    if args.border_polygon:  # hasattr(args, "border_polygon"):
+    if args.border_polygon:
         final_osmconvert_arguments.append("-B=" + args.border_polygon)
-    if args.bbox:  # hasattr(args, "bbox"):
+    if args.bbox:
         final_osmconvert_arguments.append("-b=" + args.bbox)
     old_timestamp = None
     if args.base_url == "mirror":
@@ -407,7 +407,6 @@ args.new_file.endswith(".o5m.gz") or args.new_file.endswith(".o5c.gz")
     new_file_is_changefile = args.new_file.endswith(".osc") or \
     args.new_file.endswith(".o5c") or\
 args.new_file.endswith(".osc.gz") or args.new_file.endswith(".o5c.gz")
-    #new_file_is_gz = args.new_file.endswith(".gz")
     if not os.path.exists(args.tempfiles):
         os.makedirs(args.tempfiles, 0700)
 
@@ -540,7 +539,6 @@ args.new_file.endswith(".osc.gz") or args.new_file.endswith(".o5c.gz")
         next_timestamp = timestamp
         while next_timestamp > old_timestamp:
             timestamp = next_timestamp
-            #process_changefile('daily', daily_sequence_number, timestamp)
             fcache.getfile('daily', daily_sequence_number, timestamp)
             daily_sequence_number -= 1
             next_timestamp = get_changefile_timestamp('daily',
@@ -552,14 +550,12 @@ args.new_file.endswith(".osc.gz") or args.new_file.endswith(".o5c.gz")
         next_timestamp = timestamp
         while next_timestamp > old_timestamp:
             timestamp = next_timestamp
-            #process_changefile('sporadic', sporadic_sequence_number, timestamp)
             fcache.getfile('sporadic', sporadic_sequence_number, timestamp)
             sporadic_sequence_number -= 1
             next_timestamp = get_changefile_timestamp('sporadic',
                                                       sporadic_sequence_number)
         fcache.densefiles(args.maxmerge)
-    #process remaining files which may still wait in the cache;
-    #process_changefile(0, 0, datetime(1900, 1, 1))
+    #Merging all files in cache and getting result file
     master_cachefile_name = fcache.resultfile(args.maxmerge)
     logging.info("Creating output file.")
     if not os.path.exists(master_cachefile_name):
