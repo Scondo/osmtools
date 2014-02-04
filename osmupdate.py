@@ -30,17 +30,14 @@ import tempfile
 from datetime import datetime, timedelta
 import subprocess
 import os
+import shutil
 from os.path import getsize
 import urllib
 version = "0.3P"
 osmconvert = "osmconvert"
 global_base_url = "http://planet.openstreetmap.org/replication"
 global_base_url_suffix = ""
-global_max_merge = 7
 global_osmconvert_arguments = []
-master_cachefile_name = ""
-master_cachefile_name_temp = ""
-global_tempfiles = os.path.join(tempfile.gettempdir(), "osmupdate")
 
 
 def remove(path):
@@ -57,13 +54,12 @@ def strtodatetime(s):
     which means '24 hours ago'"""
     s = s.strip()
     if s.startswith('NOW'):
-    # (s[3]!='+' && s[3]!='-') ||    !isdig(s[4]))  // wrong syntax
         s = s[3:]  # jump over "NOW"
         sec = int(s[1:])
         if s[0] == '-':
             sec = -1 * sec
         elif s[0] != '+':
-            return None  # synax error
+            return None  # syntax error
         return datetime.utcnow() + timedelta(seconds=sec)
     try:
         return datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ")
@@ -179,11 +175,8 @@ def get_changefile_timestamp(changefile_type, file_sequence_number):
 
 #There are sketches for future object cache
 class filecache(object):
-    def __init__(self, folder=None):
-        if folder is None:
-            self.folder = global_tempfiles
-        else:
-            self.folder = folder
+    def __init__(self, folder):
+        self.folder = folder
         self.cachedfiles = []
         self.newest_time = datetime(1900, 1, 1)
 
@@ -337,14 +330,15 @@ available for such a wide range of time.""")
     ap.add_argument('--sporadic', action='store_true',
                     help="""Allows to process changefile sources
 which do not have the usual "minute", "hour" and "day" subdirectories""")
-    ap.add_argument("--maxmerge", type=int, default=global_max_merge,
+    ap.add_argument("--maxmerge", type=int, default=7,
                     help="""The subprogram osmconvert is able to merge more
  than two changefiles in one run. This ability increases merging speed.
 Unfortunately, every changefile consumes about 200 MB of main memory
 while being processed. For this reason, the number of parallely processable
 changefiles is limited. Use this commandline argument to determine the
 maximum number of parallely processed changefiles. (default: %(default)s)""")
-    ap.add_argument("--tempfiles", "-t", default=global_tempfiles,
+    ap.add_argument("--tempfiles", "-t",
+                    default=os.path.join(tempfile.gettempdir(), "osmupdate"),
                     help="""On order to cache changefiles, osmupdate needs
 a separate directory. This parameter defines the name of this directory,
 including the prefix of the tempfiles' names. (default: "%(default)s")""")
@@ -394,7 +388,7 @@ URL, right after the period identifier "day" etc.(default: "%(default)s")""")
         final_osmconvert_arguments.append("-B=" + args.border_polygon)
     if args.bbox:
         final_osmconvert_arguments.append("-b=" + args.bbox)
-    old_timestamp = None
+
     if args.base_url == "mirror":
         args.base_url = "ftp://ftp5.gwdg.de/pub/misc/"
         "openstreetmap/planet.openstreetmap.org/replication"
@@ -499,12 +493,8 @@ args.new_file.endswith(".osc.gz") or args.new_file.endswith(".o5c.gz")
         raise AssertionError("Update range too large: %i days. \n To allow"
                              " such a wide range, add: --max-days=%i" % \
                              days_range)
-    global_tempfiles = args.tempfiles
     fcache = filecache(args.tempfiles)
-    master_cachefile_name = os.path.join(global_tempfiles, "temp.8")
-    master_cachefile_name_temp = os.path.join(global_tempfiles, "temp.9")
-    remove(master_cachefile_name)
-    remove(master_cachefile_name_temp)
+
     #Get and process minutely diff files from last minutely timestamp backward;
     #stop just before latest hourly timestamp
     #or OSM file timestamp has been reached;
@@ -513,7 +503,6 @@ args.new_file.endswith(".osc.gz") or args.new_file.endswith(".o5c.gz")
         while next_timestamp > hourly_timestamp \
         and next_timestamp > old_timestamp:
             timestamp = next_timestamp
-            #process_changefile('minutely', minutely_sequence_number, timestamp)
             fcache.getfile('minutely', minutely_sequence_number, timestamp)
             minutely_sequence_number -= 1
             next_timestamp = get_changefile_timestamp('minutely',
@@ -527,7 +516,6 @@ args.new_file.endswith(".osc.gz") or args.new_file.endswith(".o5c.gz")
         while (daily_timestamp is None or next_timestamp > daily_timestamp)\
             and next_timestamp > old_timestamp:
             timestamp = next_timestamp
-            #process_changefile('hourly', hourly_sequence_number, timestamp)
             fcache.getfile('hourly', hourly_sequence_number, timestamp)
             hourly_sequence_number -= 1
             next_timestamp = get_changefile_timestamp('hourly',
@@ -608,5 +596,5 @@ args.new_file.endswith(".osc.gz") or args.new_file.endswith(".o5c.gz")
             logging.info("Keeping temporary files.")
         else:
             logging.info("Deleting temporary files.")
-            os.removedirs(global_tempfiles)
+            shutil.rmtree(args.tempfiles)
         logging.info("Completed successfully")
