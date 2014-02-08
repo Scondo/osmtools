@@ -108,72 +108,81 @@ def get_file_timestamp(file_name):
     return file_timestamp
 
 
-def get_newest_changefile_info(changefile_type):
-    """Get sequence number and timestamp of the newest changefile
-    of a specific changefile type;
-    changefile_type: minutely, hourly, daily, sporadic changefile;
-    """
-    url = get_url(changefile_type) + "/state.txt"
-    changefile_timestamp = None
-    file_sequence_number = 0
-    for result in urllib.urlopen(url):
-        # get sequence number
-        sequence_number_p = result.find("sequenceNumber=")
-        if sequence_number_p != -1:
-            file_sequence_number = int(result[sequence_number_p + 15:])
-        # get timestamp
-        timestamp_p = result.find("timestamp=")
-        if timestamp_p != -1:
-            # found timestamp line
-            timestamp_p += 10  # jump over text
-            result = result[timestamp_p:].replace("\\", "").strip()
-            changefile_timestamp = strtodatetime(result)
+class changefiles(object):
+    def __init__(self, changefile_type):
+        self.changefile_type = changefile_type
+        self.url = get_url(changefile_type)
+        self.cache_seq = {}
+        self.nownum = None
 
-    if not changefile_timestamp:
-        logging.info("(no timestamp)")
-    else:
-        logging.info("newest %s timestamp: %s" % \
-                     (changefile_type, changefile_timestamp.isoformat()))
-    return (changefile_timestamp, file_sequence_number)
+    def lastnum(self, nocache=False):
+        """Get sequence number of the newest changefile
+        """
+        if self.cache_seq and not nocache:
+            return max(self.cache_seq.keys())
 
+        changefile_timestamp = None
+        file_sequence_number = 0
+        for result in urllib.urlopen(self.url + "/state.txt"):
+            # get sequence number
+            sequence_number_p = result.find("sequenceNumber=")
+            if sequence_number_p != -1:
+                file_sequence_number = int(result[sequence_number_p + 15:])
+            # get timestamp
+            timestamp_p = result.find("timestamp=")
+            if timestamp_p != -1:
+                # found timestamp line
+                timestamp_p += 10  # jump over text
+                result = result[timestamp_p:].replace("\\", "").strip()
+                changefile_timestamp = strtodatetime(result)
 
-def get_changefile_timestamp(changefile_type, file_sequence_number):
-    """Download and inspect the timestamp of a specific changefile which
-   is available in the Internet;
-   a timestamp file will not be downloaded if it
-   already exists locally as temporary file;
-   changefile_type: minutely, hourly, daily, sporadic changefile;
-   file_sequence_number: sequence number of the file;"""
-    url = get_url(changefile_type) + "/"
-    url = url + ("%03i/%03i/%03i" % (file_sequence_number / 1000000,
-                                     file_sequence_number / 1000 % 1000,
-                                     file_sequence_number % 1000))
-    url = url + ".state.txt"
-    changefile_timestamp = None
-    for result in urllib.urlopen(url):
-        # get timestamp
-        timestamp_p = result.find("timestamp=")
-        if timestamp_p != -1:
-            # found timestamp line
-            timestamp_p += 10  # jump over text
-            result = result[timestamp_p:].replace("\\", "").strip()
-            changefile_timestamp = strtodatetime(result)
-
-    if not changefile_timestamp:
-        logging.info("(no timestamp)")
-        if file_sequence_number == 0:
-            changefile_timestamp = datetime(1900, 1, 1)
+        if not changefile_timestamp:
+            logging.info("(no timestamp)")
         else:
-            AssertionError("no timestamp for %s changefile %i." %
-                           (changefile_type, file_sequence_number))
-    else:
-        logging.info("%s, id: %i, timestamp: %s" %
-                     (changefile_type, file_sequence_number,
-                      changefile_timestamp.isoformat()))
-    return changefile_timestamp
+            logging.info("newest %s timestamp: %s" % \
+                     (self.changefile_type, changefile_timestamp.isoformat()))
+
+        self.cache_seq[file_sequence_number] = changefile_timestamp
+        if self.nownum is None:
+            self.nownum = file_sequence_number
+        return file_sequence_number
+
+    def lasttime(self, nocache=False):
+        num = self.lastnum(nocache)
+        return self.cache_seq.get(num)
+
+    @property
+    def nowtime(self):
+        """Date/time of a specific changefile
+        which is available in the Internet
+        """
+        if self.nownum not in self.cache_seq:
+            url = self.url + ("/%03i/%03i/%03i" % \
+                              (self.nownum / 1000000,
+                               self.nownum / 1000 % 1000,
+                               self.nownum % 1000)) + ".state.txt"
+            changefile_timestamp = None
+            for result in urllib.urlopen(url):
+                # get timestamp
+                timestamp_p = result.find("timestamp=")
+                if timestamp_p != -1:
+                    # found timestamp line
+                    timestamp_p += 10  # jump over text
+                    result = result[timestamp_p:].replace("\\", "").strip()
+                    changefile_timestamp = strtodatetime(result)
+
+            if not changefile_timestamp:
+                AssertionError("no timestamp for %s changefile %i." %
+                           (self.changefile_type, self.nownum))
+            else:
+                logging.info("%s, id: %i, timestamp: %s" %
+                                (self.changefile_type, self.nownum,
+                                changefile_timestamp.isoformat()))
+                self.cache_seq[self.nownum] = changefile_timestamp
+
+        return self.cache_seq[self.nownum]
 
 
-#There are sketches for future object cache
 class filecache(object):
     def __init__(self, folder):
         self.folder = folder
@@ -242,9 +251,8 @@ class filecache(object):
                                                global_osmconvert_arguments))
             for filename in self.cachedfiles:
                 #Clear our temporary files (not downloaded)
-                if filename.endswith('tmp.o5c'):
+                if filename.endswith('tmp.o5c') and filename not in newlist:
                     remove(filename)
-                    pass
             self.cachedfiles = newlist
 
     def resultfile(self, maxfiles):
@@ -418,21 +426,20 @@ args.new_file.endswith(".osc.gz") or args.new_file.endswith(".o5c.gz")
     if args.old_file == args.new_file:
         raise AssertionError("Input file and output file are identical.")
 
-    # initialize sequence numbers and timestamps
-    minutely_sequence_number = hourly_sequence_number = \
-        daily_sequence_number = sporadic_sequence_number = 0
-    minutely_timestamp = hourly_timestamp = daily_timestamp = \
-        sporadic_timestamp = None
+    # initialize files enumerators
+    minutely_files = hourly_files = daily_files = sporadic_files = None
 
     if not (args.minute or args.hour or args.day or args.sporadic):
         # Detect if we can use sporadic
-        (sporadic_timestamp, sporadic_sequence_number) = \
-            get_newest_changefile_info("sporadic")
-        if sporadic_timestamp:
+        sporadic_files = changefiles('sporadic')
+        if sporadic_files.lasttime():
             logging.info("Found status information in base URL root.")
             logging.info("Ignoring subdirectories \"minute\", \"hour\","
                          " \"day\".")
             args.sporadic = True
+        else:
+            sporadic_files = None
+
     if not (args.minute or args.hour or args.day or args.sporadic):
         # if nothing predefined - use all except sporadic
         args.minute = True
@@ -441,53 +448,50 @@ args.new_file.endswith(".osc.gz") or args.new_file.endswith(".o5c.gz")
     #Get last timestamp for each, minutely, hourly, daily,
     #and sporadic diff files
     if args.minute:
-        (minutely_timestamp,
-         minutely_sequence_number) = get_newest_changefile_info("minutely")
-        if not minutely_timestamp:
+        minutely_files = changefiles('minutely')
+        if not minutely_files.lasttime():
             raise AssertionError("Could not get the newest minutely timestamp"
                                  " from the Internet.")
     if args.hour:
-        (hourly_timestamp,
-         hourly_sequence_number) = get_newest_changefile_info("hourly")
-        if not hourly_timestamp:
+        hourly_files = changefiles("hourly")
+        if not hourly_files.lasttime():
             raise AssertionError("Could not get the newest hourly timestamp"
                                  " from the Internet.")
+        else:
+            #Do not use hourly files
+            #if OSM old file's timestamp > latest hourly timestamp - 30 minutes
+            if minutely_files is not None and \
+            (hourly_files.lasttime() - old_timestamp).total_seconds() < 1800:
+                hourly_files = None
+
     if args.day:
-        (daily_timestamp,
-         daily_sequence_number) = get_newest_changefile_info("daily")
-        if not hourly_timestamp:
+        daily_files = changefiles('daily')
+        if not daily_files.lasttime():
             raise AssertionError("Could not get the newest daily timestamp"
                                  " from the Internet.")
-    if args.sporadic and not sporadic_timestamp:
-        (sporadic_timestamp,
-         sporadic_sequence_number) = get_newest_changefile_info("sporadic")
-        if not sporadic_timestamp:
+        else:
+            #Do not use daily files
+            #if OSM old file's timestamp > latest daily timestamp - 16 hours
+            if hourly_files is not None or minutely_files is not None and \
+            (daily_files.lasttime() - old_timestamp).total_seconds() < 57600:
+                daily_files = None
+
+    if args.sporadic and not sporadic_files:
+        sporadic_files = changefiles('sporadic')
+        if not sporadic_files.lasttime():
             raise AssertionError("Could not get the newest sporadic timestamp"
                                  " from the Internet.")
 
-    #Clear last hourly timestamp
-    #if OSM old file's timestamp > latest hourly timestamp - 30 minutes
-    if (hourly_timestamp - old_timestamp).total_seconds() < 30 * 60 \
-    and args.minute:
-        hourly_timestamp = None
-    #Clear last daily timestamp
-    #if OSM file timestamp > latest daily timestamp - 16 hours
-    if (daily_timestamp - old_timestamp).total_seconds() < 16 * 60 * 60 \
-    and (args.minute or args.hour):
-        daily_timestamp = None
-    #Initialize start timestamp
-    timestamp = datetime(1800, 1, 1)
-    if not (minutely_timestamp is None) and timestamp < minutely_timestamp:
-        timestamp = minutely_timestamp
-    if not (hourly_timestamp is None) and timestamp < hourly_timestamp:
-        timestamp = hourly_timestamp
-    if not (daily_timestamp is None) and timestamp < daily_timestamp:
-        timestamp = daily_timestamp
-    if not (sporadic_timestamp is None) and timestamp < sporadic_timestamp:
-        timestamp = sporadic_timestamp
-
     #Check maximum update range
-    days_range = ((timestamp - old_timestamp).total_seconds() + 86399) / 86400
+    if daily_files is not None:
+        days_range = (daily_files.lasttime() - old_timestamp).days()
+    elif hourly_files is not None:
+        days_range = (hourly_files.lasttime() - old_timestamp).days()
+    elif minutely_files is not None:
+        days_range = (minutely_files.lasttime() - old_timestamp).days()
+    elif sporadic_files is not None:
+        days_range = (sporadic_files.lasttime() - old_timestamp).days()
+
     if days_range > args.maxdays:
         #Update range too large
         raise AssertionError("Update range too large: %i days. \n To allow"
@@ -498,51 +502,37 @@ args.new_file.endswith(".osc.gz") or args.new_file.endswith(".o5c.gz")
     #Get and process minutely diff files from last minutely timestamp backward;
     #stop just before latest hourly timestamp
     #or OSM file timestamp has been reached;
-    if not (minutely_timestamp is None):
-        next_timestamp = timestamp
-        while next_timestamp > hourly_timestamp \
-        and next_timestamp > old_timestamp:
-            timestamp = next_timestamp
-            fcache.getfile('minutely', minutely_sequence_number, timestamp)
-            minutely_sequence_number -= 1
-            next_timestamp = get_changefile_timestamp('minutely',
-                                                      minutely_sequence_number)
-        fcache.densefiles(args.maxmerge)
+    if minutely_files is not None:
+        hour_to = hourly_files.lasttime() if hourly_files \
+                    else datetime(1900, 1, 1)
+        while minutely_files.nowtime > hour_to \
+            and minutely_files.nowtime > old_timestamp:
+            fcache.getfile('minutely', minutely_files.nownum,
+                                        minutely_files.nowtime)
+            minutely_files.nownum -= 1
     #Get and process hourly diff files from last hourly timestamp
     #backward; stop just before last daily timestamp or
     #OSM file timestamp has been reached;
-    if not (hourly_timestamp is None):
-        next_timestamp = timestamp
-        while (daily_timestamp is None or next_timestamp > daily_timestamp)\
-            and next_timestamp > old_timestamp:
-            timestamp = next_timestamp
-            fcache.getfile('hourly', hourly_sequence_number, timestamp)
-            hourly_sequence_number -= 1
-            next_timestamp = get_changefile_timestamp('hourly',
-                                                      hourly_sequence_number)
-        fcache.densefiles(args.maxmerge)
+    if not (hourly_files is None):
+        day_to = daily_files.lasttime() if daily_files \
+                    else datetime(1900, 1, 1)
+        while hourly_files.nowtime > day_to \
+            and hourly_files.nowtime > old_timestamp:
+            fcache.getfile('hourly', hourly_files.nownum, hourly_files.nowtime)
+            hourly_files.nownum -= 1
     #Get and process daily diff files from last daily timestamp
     #backward; stop just before OSM file timestamp has been reached;
-    if not (daily_timestamp is None):
-        next_timestamp = timestamp
-        while next_timestamp > old_timestamp:
-            timestamp = next_timestamp
-            fcache.getfile('daily', daily_sequence_number, timestamp)
-            daily_sequence_number -= 1
-            next_timestamp = get_changefile_timestamp('daily',
-                                                      daily_sequence_number)
-        fcache.densefiles(args.maxmerge)
+    if not (daily_files is None):
+        while daily_files.nowtime > old_timestamp:
+            fcache.getfile('daily', daily_files.nownum, daily_files.nowtime)
+            daily_files.nownum -= 1
     #Get and process sporadic diff files from last sporadic timestamp
     #backward; stop just before OSM file timestamp has been reached;
-    if not (sporadic_timestamp is None):
-        next_timestamp = timestamp
-        while next_timestamp > old_timestamp:
-            timestamp = next_timestamp
-            fcache.getfile('sporadic', sporadic_sequence_number, timestamp)
-            sporadic_sequence_number -= 1
-            next_timestamp = get_changefile_timestamp('sporadic',
-                                                      sporadic_sequence_number)
-        fcache.densefiles(args.maxmerge)
+    if not (sporadic_files is None):
+        while sporadic_files.nowtime > old_timestamp:
+            fcache.getfile('sporadic', sporadic_files.nownum,
+                                        sporadic_files.nowtime)
+            sporadic_files.nownum -= 1
     #Merging all files in cache and getting result file
     master_cachefile_name = fcache.resultfile(args.maxmerge)
     logging.info("Creating output file.")
